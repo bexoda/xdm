@@ -14,41 +14,50 @@ namespace XDM.Core.MediaParser.YouTube
         public static KeyValuePair<List<ParsedDualUrlVideoFormat>, List<ParsedUrlVideoFormat>>
             GetFormats(string file)
         {
-            var items = JsonConvert.DeserializeObject<VideoFormatData>(File.ReadAllText(file),
+            var text = File.ReadAllText(file);
+            var items = JsonConvert.DeserializeObject<VideoFormatData>(text,
                 new JsonSerializerSettings
                 {
                     MissingMemberHandling = MissingMemberHandling.Ignore
                 });
 
-            // Try to extract player JS URL for cipher decryption
-            var playerJsUrl = YouTubeCipherDecryptor.ExtractPlayerJsUrl(file);
-
-            // Resolve URLs – prefer direct url, fall back to SignatureCipher decryption
-            ResolveFormatUrls(items?.StreamingData?.AdaptiveFormats, playerJsUrl);
-            ResolveFormatUrls(items?.StreamingData?.Formats, playerJsUrl);
-
             var dualVideoItems = new List<ParsedDualUrlVideoFormat>();
             var videoItems = new List<ParsedUrlVideoFormat>();
 
-            var maxOfEachQualityVideoGroupMp4 = items.StreamingData?.AdaptiveFormats
-                .Where(i => i.MimeType.StartsWith("video/mp4") && i.Url != null)
+            if (items?.StreamingData == null)
+            {
+                Log.Debug("YouTube manifest deserialized to null or has no StreamingData");
+                return new KeyValuePair<List<ParsedDualUrlVideoFormat>, List<ParsedUrlVideoFormat>>(dualVideoItems, videoItems);
+            }
+
+            // Try to extract player JS URL for cipher decryption (reuse already-read text)
+            var playerJsUrl = YouTubeCipherDecryptor.ExtractPlayerJsUrlFromText(text);
+
+            // Resolve URLs – prefer direct url, fall back to SignatureCipher decryption
+            ResolveFormatUrls(items.StreamingData.AdaptiveFormats, playerJsUrl);
+            ResolveFormatUrls(items.StreamingData.Formats, playerJsUrl);
+
+            var title = items.VideoDetails?.Title ?? "video";
+
+            var maxOfEachQualityVideoGroupMp4 = items.StreamingData.AdaptiveFormats
+                ?.Where(i => i.MimeType.StartsWith("video/mp4") && i.Url != null)
                 .GroupBy(x => x.QualityLabel)
                 .Select(g => g.OrderByDescending(a => a.ContentLength / a.Bitrate).First());
 
-            var maxOfEachQualityVideoGroupWebm = items.StreamingData?.AdaptiveFormats
-                .Where(i => i.MimeType.StartsWith("video/webm") && i.Url != null)
+            var maxOfEachQualityVideoGroupWebm = items.StreamingData.AdaptiveFormats
+                ?.Where(i => i.MimeType.StartsWith("video/webm") && i.Url != null)
                 .GroupBy(x => x.QualityLabel)
                 .Select(g => g.OrderByDescending(a => a.ContentLength / a.Bitrate).First());
 
             // .Select(g => g.OrderByDescending(a => a.Bitrate).First());
 
-            var maxOfEachQualityAudioMp4 = items.StreamingData?.AdaptiveFormats
-                .Where(i => i.MimeType.StartsWith("audio/mp4") && i.Url != null)
+            var maxOfEachQualityAudioMp4 = items.StreamingData.AdaptiveFormats
+                ?.Where(i => i.MimeType.StartsWith("audio/mp4") && i.Url != null)
                 .GroupBy(x => x.QualityLabel + x.MimeType)
                 .Select(g => g.OrderByDescending(a => a.ContentLength / a.Bitrate).First());
 
-            var maxOfEachQualityAudioWebm = items.StreamingData?.AdaptiveFormats
-               .Where(i => i.MimeType.StartsWith("audio/webm") && i.Url != null)
+            var maxOfEachQualityAudioWebm = items.StreamingData.AdaptiveFormats
+               ?.Where(i => i.MimeType.StartsWith("audio/webm") && i.Url != null)
                .GroupBy(x => x.QualityLabel + x.MimeType)
                .Select(g => g.OrderByDescending(a => a.ContentLength / a.Bitrate).First());
 
@@ -60,7 +69,7 @@ namespace XDM.Core.MediaParser.YouTube
                     {
                         var ext = GetMediaExtension(video.MimeType, audio.MimeType);
                         dualVideoItems.Add(
-                            new ParsedDualUrlVideoFormat(items.VideoDetails.Title,
+                            new ParsedDualUrlVideoFormat(title,
                                 video.Url,
                                 audio.Url,
                                 video.QualityLabel,
@@ -80,7 +89,7 @@ namespace XDM.Core.MediaParser.YouTube
                     {
                         var ext = GetMediaExtension(video.MimeType, audio.MimeType);
                         dualVideoItems.Add(
-                            new ParsedDualUrlVideoFormat(items.VideoDetails.Title,
+                            new ParsedDualUrlVideoFormat(title,
                                 video.Url,
                                 audio.Url,
                                 video.QualityLabel,
@@ -115,12 +124,12 @@ namespace XDM.Core.MediaParser.YouTube
             //    }
             //}
 
-            if (items.StreamingData != null)
+            if (items.StreamingData.Formats != null)
             {
                 videoItems.AddRange(
-                    items.StreamingData?.Formats.Where(
+                    items.StreamingData.Formats.Where(
                         item => item.MimeType.StartsWith("video/") && item.Url != null).Select(
-                            item => new ParsedUrlVideoFormat(items.VideoDetails.Title,
+                            item => new ParsedUrlVideoFormat(title,
                                 item.Url,
                                 item.QualityLabel,
                                 (item.MimeType.StartsWith("video/mp4") ? "MP4" : "MKV"),

@@ -45,13 +45,29 @@ namespace XDM.Core.BrowserMonitoring
         }
 
         /// <summary>
-        /// Return the best available cookies string for a YouTube manifest fetch.
-        /// Prefers the cookies already on the message; falls back to cached tab cookies.
+        /// Return the best available cookies string for a manifest fetch.
+        /// Falls back to cached YouTube tab cookies only when the request URL
+        /// is a YouTube / googlevideo host, so non-YouTube hosts never receive them.
         /// </summary>
         private static string? GetYouTubeCookies(Message message)
         {
             if (!string.IsNullOrEmpty(message.Cookies)) return message.Cookies;
-            return _ytCookies;
+            if (IsYouTubeUrl(message.Url))
+                return _ytCookies;
+            return null;
+        }
+
+        /// <summary>Checks whether a URL belongs to YouTube or its CDN.</summary>
+        private static bool IsYouTubeUrl(string? url)
+        {
+            if (string.IsNullOrEmpty(url)) return false;
+            try
+            {
+                var host = new Uri(url!).Host;
+                return host.Contains("youtube.com") || host.Contains("googlevideo.com")
+                    || host.Contains("ytimg.com") || host.Contains("youtube-nocookie.com");
+            }
+            catch { return false; }
         }
 
         public static void ProcessMediaMessage(Message message)

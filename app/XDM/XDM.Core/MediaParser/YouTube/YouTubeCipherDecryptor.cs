@@ -52,7 +52,7 @@ namespace XDM.Core.MediaParser.YouTube
                 }
 
                 var decrypted = ApplyActions(parts.Signature, actions);
-                var sp = parts.SignatureParam ?? "sig";
+                var sp = parts.SignatureParam ?? "signature";
                 var separator = parts.Url.Contains('?') ? "&" : "?";
                 return $"{parts.Url}{separator}{sp}={WebUtility.UrlEncode(decrypted)}";
             }
@@ -68,12 +68,14 @@ namespace XDM.Core.MediaParser.YouTube
         /// JSON response body (the same manifest file the parser already downloaded).
         /// Falls back to a well-known player path pattern.
         /// </summary>
-        public static string? ExtractPlayerJsUrl(string manifestPath)
+        /// <summary>
+        /// Extracts the player JS URL from already-read manifest text,
+        /// avoiding a redundant file read.
+        /// </summary>
+        public static string? ExtractPlayerJsUrlFromText(string text)
         {
             try
             {
-                var text = File.ReadAllText(manifestPath);
-
                 // Look for "PLAYER_JS_URL":"..." or "jsUrl":"..." inside the JSON
                 var patterns = new[]
                 {
@@ -98,9 +100,23 @@ namespace XDM.Core.MediaParser.YouTube
             }
             catch (Exception ex)
             {
-                Log.Debug(ex, "ExtractPlayerJsUrl failed");
+                Log.Debug(ex, "ExtractPlayerJsUrlFromText failed");
             }
             return null;
+        }
+
+        /// <summary>File-path overload – reads the file then delegates to the text-based method.</summary>
+        public static string? ExtractPlayerJsUrl(string manifestPath)
+        {
+            try
+            {
+                return ExtractPlayerJsUrlFromText(File.ReadAllText(manifestPath));
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "ExtractPlayerJsUrl failed");
+                return null;
+            }
         }
 
         #region Cipher action extraction
@@ -109,15 +125,26 @@ namespace XDM.Core.MediaParser.YouTube
         {
             if (string.IsNullOrEmpty(playerJsUrl)) return null;
 
+            // Fast path – check cache without blocking on network I/O
+            lock (_lock)
+            {
+                if (_cachedPlayerUrl == playerJsUrl && _cachedActions != null)
+                    return _cachedActions;
+            }
+
+            // Slow path – download outside the lock to avoid thread contention
+            var js = DownloadText(playerJsUrl!);
+            if (js == null) return null;
+
+            var actions = ExtractCipherActions(js);
+
+            // Re-acquire lock and update cache (double-check in case another thread won)
             lock (_lock)
             {
                 if (_cachedPlayerUrl == playerJsUrl && _cachedActions != null)
                     return _cachedActions;
 
-                var js = DownloadText(playerJsUrl!);
-                if (js == null) return null;
-
-                _cachedActions = ExtractCipherActions(js);
+                _cachedActions = actions;
                 _cachedPlayerUrl = playerJsUrl;
                 return _cachedActions;
             }
@@ -163,20 +190,30 @@ namespace XDM.Core.MediaParser.YouTube
                 if (!objMatch.Success) return null;
                 var objBody = objMatch.Groups[1].Value;
 
-                // Step 4 – classify each method in the helper object
+                // Step 4 – classify each method in the helper object.
+                // We match the method name, then scan forward from the opening '{'
+                // to its balanced closing '}' so nested braces are handled correctly.
                 var methodMap = new Dictionary<string, CipherActionType>();
-                var methodMatches = Regex.Matches(objBody,
-                    @"([a-zA-Z0-9$]+)\s*:\s*function\s*\([^)]*\)\s*\{([^}]+)\}");
-                foreach (Match mm in methodMatches)
+                var methodHeaderPattern = new Regex(
+                    @"([a-zA-Z0-9$]+)\s*:\s*function\s*\([^)]*\)\s*\{");
+                var mhMatch = methodHeaderPattern.Match(objBody);
+                while (mhMatch.Success)
                 {
-                    var name = mm.Groups[1].Value;
-                    var mBody = mm.Groups[2].Value;
+                    var name = mhMatch.Groups[1].Value;
+                    var bodyStart = mhMatch.Index + mhMatch.Length; // right after '{'
+                    var mBody = ExtractBalancedBody(objBody, bodyStart);
+
                     if (mBody.Contains("reverse"))
                         methodMap[name] = CipherActionType.Reverse;
                     else if (mBody.Contains("splice"))
                         methodMap[name] = CipherActionType.Splice;
-                    else // swap
+                    else if (mBody.Contains("var") || mBody.Contains("["))
+                        // Swap functions typically access an array index: var c=a[0];a[0]=a[b%a.length];…
                         methodMap[name] = CipherActionType.Swap;
+                    else
+                        Log.Debug($"Unknown cipher helper method '{name}': {mBody}");
+
+                    mhMatch = methodHeaderPattern.Match(objBody, bodyStart);
                 }
 
                 // Step 5 – parse the call sequence in the decipher function body
@@ -206,6 +243,25 @@ namespace XDM.Core.MediaParser.YouTube
         #endregion
 
         #region Apply transforms
+
+        /// <summary>
+        /// Starting right after an opening '{', scans <paramref name="text"/> from
+        /// <paramref name="start"/> to find the matching closing '}', respecting
+        /// nested brace pairs. Returns the content between the braces.
+        /// </summary>
+        private static string ExtractBalancedBody(string text, int start)
+        {
+            int depth = 1;
+            int i = start;
+            while (i < text.Length && depth > 0)
+            {
+                if (text[i] == '{') depth++;
+                else if (text[i] == '}') depth--;
+                if (depth > 0) i++;
+            }
+            // i now points at the closing '}' (or past end)
+            return text.Substring(start, i - start);
+        }
 
         private static string ApplyActions(string signature, List<CipherAction> actions)
         {

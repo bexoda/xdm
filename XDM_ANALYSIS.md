@@ -4,7 +4,7 @@
 
 **Xtreme Download Manager (XDM)** is a powerful, cross-platform download manager application designed to accelerate download speeds up to 500%, save videos from streaming websites, resume broken downloads, and convert media files.
 
-**Project Location**: `c:/Users/Ben/source/repos/bexoda/xdm`
+**Project Location**: Repository root (`xdm/`)
 
 **Original Project**: https://github.com/subhra74/xdm
 
