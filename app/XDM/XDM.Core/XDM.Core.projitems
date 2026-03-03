@@ -61,6 +61,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)MediaParser\Hls\HlsPlaylistContainer.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)MediaParser\Util\UrlResolver.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)MediaParser\YouTube\VideoFormatData.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)MediaParser\YouTube\YouTubeCipherDecryptor.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)MediaParser\YouTube\YoutubeDataFormatParser.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)TraceLog\Log.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Translations\TextResource.cs" />

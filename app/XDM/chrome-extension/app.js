@@ -43,7 +43,10 @@ export default class App {
             mediaExts: msg.requestFileExts,
             blockedHosts: msg.blockedHosts,
             matchingHosts: msg.matchingHosts,
-            mediaTypes: msg.mediaTypes
+            mediaTypes: msg.mediaTypes,
+            fileExts: msg.fileExts,
+            requestFileExts: msg.requestFileExts,
+            urlPatterns: msg.urlPatterns
         });
         this.updateActionIcon();
     }
@@ -102,10 +105,23 @@ export default class App {
                 this.tabsWatcher.find(t => tab.url.indexOf(t) > 0)) {
                 this.logger.log("Tab changed: " + changeInfo.title + " => " + tab.url);
                 try {
-                    this.connector.postMessage("/tab-update", {
+                    // For YouTube tabs, forward cookies so the desktop app can
+                    // fetch age-restricted / logged-in-only content.
+                    const payload = {
                         tabUrl: tab.url,
                         tabTitle: changeInfo.title
-                    });
+                    };
+
+                    if (tab.url && tab.url.indexOf(".youtube.") > 0) {
+                        chrome.cookies.getAll({ url: tab.url }, (cookies) => {
+                            if (cookies && cookies.length > 0) {
+                                payload.cookie = cookies.map(c => c.name + "=" + c.value).join("; ");
+                            }
+                            this.connector.postMessage("/tab-update", payload);
+                        });
+                    } else {
+                        this.connector.postMessage("/tab-update", payload);
+                    }
                 } catch (ex) {
                     console.log(ex);
                 }

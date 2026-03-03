@@ -82,8 +82,8 @@
 
   <ItemGroup>
     <!--<PackageReference Include="Microsoft.Windows.Compatibility" Version="5.0.2" />-->
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
-    <PackageReference Include="System.Data.SQLite.Core" Version="1.0.116" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="System.Data.SQLite.Core" Version="1.0.119" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -94,12 +94,12 @@
   </PropertyGroup>
 
   <ItemGroup Condition=" '$(TargetFramework)' != 'net3.5' ">
-    <PackageReference Include="System.Buffers" Version="4.5.1" />
+    <PackageReference Include="System.Buffers" Version="4.6.1" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == 'net4.5' or '$(TargetFramework)' == 'net4.7.2' or '$(TargetFramework)' == 'net5.0' or '$(TargetFramework)' == 'net6.0'">
     <PackageReference Include="System.ValueTuple">
-      <Version>4.5.0</Version>
+      <Version>4.6.2</Version>
     </PackageReference>
   </ItemGroup>
 

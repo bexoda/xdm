@@ -112,6 +112,13 @@ namespace XDM.Core.BrowserMonitoring
             {
                 return;
             }
+            // Cache YouTube cookies so manifest fetches can authenticate
+            // (needed for age-restricted / members-only videos).
+            if (!string.IsNullOrEmpty(msg.Cookie) && msg.TabUrl != null
+                && msg.TabUrl.Contains(".youtube."))
+            {
+                VideoUrlHelper.SetYouTubeCookies(msg.Cookie);
+            }
             ApplicationContext.VideoTracker.UpdateMediaTitle(msg.TabUrl, msg.TabTitle);
         }
 

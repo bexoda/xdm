@@ -32,6 +32,28 @@ namespace XDM.Core.BrowserMonitoring
         private static HashSet<string> m3u8MpdTabs = new(); //Keep track of tab id which triggered m3u8 or mpd manifest
         private static HashSet<string> suspectedMp4Fragments = new();
 
+        /// <summary>
+        /// Cached YouTube cookies forwarded from the browser extension.
+        /// Used to authenticate manifest fetches for age-restricted / members-only videos.
+        /// </summary>
+        private static string? _ytCookies;
+
+        /// <summary>Store YouTube cookies received from the browser extension.</summary>
+        internal static void SetYouTubeCookies(string cookies)
+        {
+            _ytCookies = cookies;
+        }
+
+        /// <summary>
+        /// Return the best available cookies string for a YouTube manifest fetch.
+        /// Prefers the cookies already on the message; falls back to cached tab cookies.
+        /// </summary>
+        private static string? GetYouTubeCookies(Message message)
+        {
+            if (!string.IsNullOrEmpty(message.Cookies)) return message.Cookies;
+            return _ytCookies;
+        }
+
         public static void ProcessMediaMessage(Message message)
         {
             var contentType = message.GetResponseHeaderFirstValue("Content-Type");
@@ -826,6 +848,10 @@ namespace XDM.Core.BrowserMonitoring
         {
             try
             {
+                // For YouTube manifests, prefer cached browser cookies so that
+                // age-restricted / members-only content can be authenticated.
+                var cookies = GetYouTubeCookies(message);
+
                 using var http = HttpClientFactory.NewHttpClient(null);
                 http.Timeout = TimeSpan.FromSeconds(Config.Instance.NetworkTimeout);
 
@@ -853,8 +879,8 @@ namespace XDM.Core.BrowserMonitoring
                 }
 
                 var request = "POST" == message.RequestMethod ?
-                    http.CreatePostRequest(new Uri(message.Url), headers, message.Cookies, null, body) :
-                    http.CreateGetRequest(new Uri(message.Url), headers, message.Cookies, null);
+                    http.CreatePostRequest(new Uri(message.Url), headers, cookies, null, body) :
+                    http.CreateGetRequest(new Uri(message.Url), headers, cookies, null);
 
                 using var response = http.Send(request);
                 Log.Debug("Downloading manifest response: " + response.StatusCode);

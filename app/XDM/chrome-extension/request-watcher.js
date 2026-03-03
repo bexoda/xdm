@@ -90,11 +90,20 @@ export default class RequestWatcher {
     }
 
     onSendHeadersEvent(info) {
-        if (info.method !== "GET" && !(this.matchingHosts
-            && this.matchingHosts.find(matchingHost => info.url.indexOf(matchingHost) > 0))) {
-            return;
-        }
+        // Track ALL request methods so we never miss media streams delivered
+        // via POST (e.g. some CDN segment requests) or other verbs.
+        // Filtering happens on the response side in isMatchingRequest().
         this.requestMap.set(info.requestId, info);
+
+        // Prevent unbounded growth: purge stale entries older than 5 minutes.
+        if (this.requestMap.size > 500) {
+            const cutoff = Date.now() - 5 * 60 * 1000;
+            for (const [id, req] of this.requestMap) {
+                if (req.timeStamp && req.timeStamp < cutoff) {
+                    this.requestMap.delete(id);
+                }
+            }
+        }
     }
 
     onHeadersReceivedEvent(res) {

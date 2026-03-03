@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Text;
+using TraceLog;
 
 namespace XDM.Core.MediaParser.YouTube
 {
@@ -18,6 +19,13 @@ namespace XDM.Core.MediaParser.YouTube
                 {
                     MissingMemberHandling = MissingMemberHandling.Ignore
                 });
+
+            // Try to extract player JS URL for cipher decryption
+            var playerJsUrl = YouTubeCipherDecryptor.ExtractPlayerJsUrl(file);
+
+            // Resolve URLs – prefer direct url, fall back to SignatureCipher decryption
+            ResolveFormatUrls(items?.StreamingData?.AdaptiveFormats, playerJsUrl);
+            ResolveFormatUrls(items?.StreamingData?.Formats, playerJsUrl);
 
             var dualVideoItems = new List<ParsedDualUrlVideoFormat>();
             var videoItems = new List<ParsedUrlVideoFormat>();
@@ -151,23 +159,34 @@ namespace XDM.Core.MediaParser.YouTube
             return "MKV";
         }
 
-        //private static string ParseUrl(string text)
-        //{
-        //    var arr = text.Split('&');
-        //    var finalUrl = new StringBuilder();
-        //    String url = null;
-        //    foreach (var item in arr)
-        //    {
-        //        if (item.StartsWith("url"))
-        //        {
-        //            url = WebUtility.UrlDecode(item);
-        //            continue;
-        //        }
-        //        finalUrl.Append('&');
-        //        finalUrl.Append(item);
-        //    }
-        //    finalUrl.Insert(0, url.Substring(url.IndexOf('=') + 1));
-        //    return finalUrl.ToString();
-        //}
+        /// <summary>
+        /// For formats that have no direct <c>Url</c> but carry a <c>SignatureCipher</c>,
+        /// attempt to decrypt the cipher and populate the <c>Url</c> field so that
+        /// downstream code can treat them like any other format.
+        /// </summary>
+        private static void ResolveFormatUrls(List<VideoFormat>? formats, string? playerJsUrl)
+        {
+            if (formats == null) return;
+            foreach (var fmt in formats)
+            {
+                if (fmt.Url != null) continue; // already has a direct URL
+                if (string.IsNullOrEmpty(fmt.SignatureCipher)) continue;
+
+                try
+                {
+                    var decrypted = YouTubeCipherDecryptor.DecryptSignatureCipherUrl(
+                        fmt.SignatureCipher!, playerJsUrl);
+                    if (decrypted != null)
+                    {
+                        fmt.Url = decrypted;
+                        Log.Debug($"Cipher-decrypted URL for itag {fmt.Itag}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug(ex, $"Cipher decryption failed for itag {fmt.Itag}");
+                }
+            }
+        }
     }
 }
