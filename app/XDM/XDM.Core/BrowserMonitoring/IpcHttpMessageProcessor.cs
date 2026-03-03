@@ -120,6 +120,21 @@ namespace XDM.Core.BrowserMonitoring
                 VideoUrlHelper.SetYouTubeCookies(msg.Cookie);
             }
             ApplicationContext.VideoTracker.UpdateMediaTitle(msg.TabUrl, msg.TabTitle);
+
+            // When the user navigates to a YouTube watch page, query the
+            // InnerTube API directly to get all available formats.
+            if (msg.TabUrl != null && msg.TabUrl.Contains("/watch"))
+            {
+                var videoId = VideoUrlHelper.ExtractYouTubeVideoId(msg.TabUrl);
+                if (videoId != null)
+                {
+                    System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+                    {
+                        try { VideoUrlHelper.FetchYouTubeVideoFormats(videoId, msg.TabTitle); }
+                        catch (Exception ex) { Log.Debug(ex, "FetchYouTubeVideoFormats error"); }
+                    });
+                }
+            }
         }
 
         private void OnDownloadMessage(RequestContext context)

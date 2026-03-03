@@ -44,6 +44,163 @@ namespace XDM.Core.BrowserMonitoring
             _ytCookies = cookies;
         }
 
+        /// <summary>Tracks previously fetched video IDs to avoid duplicate API calls.</summary>
+        private static readonly HashSet<string> _fetchedVideoIds = new();
+
+        /// <summary>Extract the 'v' query parameter from a YouTube watch URL.</summary>
+        internal static string? ExtractYouTubeVideoId(string url)
+        {
+            try
+            {
+                var uri = new Uri(url);
+                if (!uri.Host.Contains("youtube")) return null;
+                var query = uri.Query;
+                if (string.IsNullOrEmpty(query)) return null;
+                foreach (var part in query.TrimStart('?').Split('&'))
+                {
+                    var kv = part.Split(new[] { '=' }, 2);
+                    if (kv.Length == 2 && kv[0] == "v" && !string.IsNullOrEmpty(kv[1]))
+                        return Uri.UnescapeDataString(kv[1]);
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>
+        /// Call YouTube's InnerTube player API directly to retrieve all
+        /// available video/audio formats for the given video ID.
+        /// This is the same approach yt-dlp and IDM use.
+        /// </summary>
+        internal static void FetchYouTubeVideoFormats(string videoId, string? title)
+        {
+            lock (_fetchedVideoIds)
+            {
+                if (_fetchedVideoIds.Contains(videoId)) return;
+                _fetchedVideoIds.Add(videoId);
+                // Cap the set so it doesn't grow unbounded
+                if (_fetchedVideoIds.Count > 200)
+                    _fetchedVideoIds.Clear();
+            }
+
+            Log.Debug("FetchYouTubeVideoFormats: " + videoId);
+
+            var apiUrl = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
+            var postBody = @"{
+  ""videoId"": """ + videoId + @""",
+  ""context"": {
+    ""client"": {
+      ""clientName"": ""WEB"",
+      ""clientVersion"": ""2.20260301.00.00""
+    }
+  },
+  ""contentCheckOk"": true,
+  ""racyCheckOk"": true
+}";
+
+            var bodyBytes = Encoding.UTF8.GetBytes(postBody);
+            var cookies = _ytCookies;
+
+            using var http = HttpClientFactory.NewHttpClient(null);
+            http.Timeout = TimeSpan.FromSeconds(Config.Instance.NetworkTimeout);
+
+            var headers = new Dictionary<string, List<string>>
+            {
+                ["Content-Type"] = new List<string> { "application/json" },
+                ["Accept"] = new List<string> { "*/*" },
+                ["User-Agent"] = new List<string> { "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" },
+                ["Origin"] = new List<string> { "https://www.youtube.com" },
+                ["Referer"] = new List<string> { "https://www.youtube.com/watch?v=" + videoId }
+            };
+
+            var request = http.CreatePostRequest(new Uri(apiUrl), headers, cookies, null, bodyBytes);
+            using var response = http.Send(request);
+            Log.Debug("InnerTube API response: " + response.StatusCode);
+
+            if (response.StatusCode != System.Net.HttpStatusCode.OK)
+            {
+                Log.Debug("InnerTube API failed with status: " + response.StatusCode);
+                return;
+            }
+
+            // Save response to temp file for parser
+            var tempPath = Path.GetTempFileName();
+            try
+            {
+                using (var fs = new FileStream(tempPath, FileMode.Create))
+                {
+                    response.GetResponseStream().CopyTo(fs);
+                }
+
+                var kv = YoutubeDataFormatParser.GetFormats(tempPath);
+                var dualVideoItems = kv.Key;
+                var videoItems = kv.Value;
+                Log.Debug("InnerTube formats: Dual=" + dualVideoItems.Count + " Single=" + videoItems.Count);
+
+                var reqHeaders = new Dictionary<string, List<string>>(headers);
+                reqHeaders.Remove("Content-Type");
+
+                if (dualVideoItems.Count > 0)
+                {
+                    lock (ApplicationContext.CoreService)
+                    {
+                        var list = new List<KeyValuePair<DualSourceHTTPDownloadInfo, StreamingVideoDisplayInfo>>();
+                        foreach (var item in dualVideoItems)
+                        {
+                            var fileExt = item.MediaContainer;
+                            var mediaItem = new DualSourceHTTPDownloadInfo
+                            {
+                                Uri1 = item.VideoUrl,
+                                Uri2 = item.AudioUrl,
+                                Headers1 = reqHeaders,
+                                Headers2 = reqHeaders,
+                                File = FileHelper.SanitizeFileName(item.Title) + "." + fileExt,
+                                Cookies1 = cookies,
+                                Cookies2 = cookies
+                            };
+                            var size = item.Size > 0 ? FormattingHelper.FormatSize(item.Size) : string.Empty;
+                            var displayInfo = new StreamingVideoDisplayInfo
+                            {
+                                Quality = $"[{fileExt.ToUpperInvariant()}] {size} {item.FormatDescription}",
+                                Size = item.Size,
+                                CreationTime = DateTime.Now
+                            };
+                            list.Add(new KeyValuePair<DualSourceHTTPDownloadInfo, StreamingVideoDisplayInfo>(mediaItem, displayInfo));
+                        }
+                        ApplicationContext.VideoTracker.AddVideoNotifications(list);
+                    }
+                }
+
+                if (videoItems.Count > 0)
+                {
+                    foreach (var item in videoItems)
+                    {
+                        var video = new SingleSourceHTTPDownloadInfo
+                        {
+                            Uri = item.MediaUrl,
+                            Headers = reqHeaders,
+                            File = FileHelper.SanitizeFileName(item.Title) + "." + item.MediaContainer,
+                            Cookies = cookies,
+                            ContentLength = item.Size
+                        };
+                        var displayInfo = new StreamingVideoDisplayInfo
+                        {
+                            Quality = $"[{item.MediaContainer?.ToUpperInvariant()}] {item.FormatDescription}",
+                            Size = item.Size,
+                            CreationTime = DateTime.Now
+                        };
+                        ApplicationContext.VideoTracker.AddVideoNotification(displayInfo, video);
+                    }
+                }
+
+                Log.Debug("FetchYouTubeVideoFormats complete for: " + videoId);
+            }
+            finally
+            {
+                try { File.Delete(tempPath); } catch { }
+            }
+        }
+
         /// <summary>
         /// Return the best available cookies string for a manifest fetch.
         /// Falls back to cached YouTube tab cookies only when the request URL
